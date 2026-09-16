@@ -1,0 +1,82 @@
+#!/usr/bin/perl
+#
+# claude-name-tab — pin a custom name on this Terminal tab.
+#
+#   claude-name-tab "API refactor"    pin a name
+#   claude-name-tab --clear           go back to automatic naming
+#   claude-name-tab --show            print the current pinned name
+#
+# The name is stored per-tab and the claude-terminal-title.pl hook reuses it
+# for every later event in this tab, so it survives the next prompt, the next
+# tool call, and the next session in the same tab.
+
+use strict;
+use warnings;
+use File::Basename qw(basename);
+use File::Path qw(make_path);
+use Cwd qw(getcwd);
+
+my $tty = `ps -o tty= -p $$ 2>/dev/null`;
+$tty = '' unless defined $tty;
+$tty =~ s/\s+//g;
+$tty =~ s{/}{_}g;
+$tty = 'default' if $tty eq '' || $tty eq '??';
+
+my $dir = ($ENV{TMPDIR} || '/tmp') . '/claude-terminal-title';
+eval { make_path($dir) unless -d $dir; 1 } or $dir = '/tmp';
+
+my $override_file = "$dir/$tty.override";
+my $task_file     = "$dir/$tty.task";
+
+my $arg = shift @ARGV;
+$arg = '' unless defined $arg;
+
+sub emit {
+    my ($title) = @_;
+    my $seq = "\e]0;$title\a";
+    if (open my $fh, '>', '/dev/tty') {
+        binmode $fh, ':encoding(UTF-8)';
+        print {$fh} $seq;
+        close $fh;
+    }
+    binmode STDOUT, ':encoding(UTF-8)';
+    print "$title\n";
+}
+
+my $folder = basename(getcwd());
+$folder = 'claude' if !length($folder) || $folder eq '/';
+
+if ($arg eq '--clear' || $arg eq '-c') {
+    unlink $override_file;
+    emit($folder);
+    exit 0;
+}
+
+if ($arg eq '--show' || $arg eq '-s') {
+    my $cur = '';
+    if (open my $fh, '<:encoding(UTF-8)', $override_file) {
+        local $/;
+        $cur = <$fh>;
+        close $fh;
+    }
+    $cur = '' unless defined $cur;
+    $cur =~ s/\s+\z//;
+    print length($cur) ? "$cur\n" : "(no pinned name)\n";
+    exit 0;
+}
+
+my $name = join ' ', ($arg, @ARGV);
+$name =~ s/\s+/ /g;
+$name =~ s/^\s+|\s+$//g;
+
+if (!length $name) {
+    print STDERR qq{usage: claude-name-tab "Some name" | --clear | --show\n};
+    exit 2;
+}
+
+open my $fh, '>:encoding(UTF-8)', $override_file or die "cannot write $override_file: $!\n";
+print {$fh} $name;
+close $fh;
+
+emit("$folder \x{2014} $name");
+exit 0;
